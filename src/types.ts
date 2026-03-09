@@ -115,11 +115,20 @@ export interface OAuthConfig {
 }
 
 /**
+ * OpenAI content block (for array-format content)
+ */
+export interface OpenAIContentBlock {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: { url: string; detail?: string };
+}
+
+/**
  * OpenAI Chat Completion Message
  */
 export interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | OpenAIContentBlock[] | null;
   name?: string;
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;

@@ -12,6 +12,7 @@
 import {
   OpenAIChatCompletionRequest,
   OpenAIMessage,
+  OpenAIContentBlock,
   OpenAITool,
   OpenAIChatCompletionResponse,
   OpenAIErrorResponse,
@@ -22,6 +23,21 @@ import {
   ContentBlock,
 } from '../types.js';
 import { mapOpenAIModelToAnthropic } from './model-mapper.js';
+
+/**
+ * Extract text from OpenAI message content, which can be a string, null,
+ * or an array of content blocks per the OpenAI Chat Completions spec.
+ */
+function extractTextContent(content: string | OpenAIContentBlock[] | null): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((block) => block.type === 'text' && block.text)
+      .map((block) => block.text!)
+      .join('');
+  }
+  return '';
+}
 
 /**
  * Translate OpenAI Chat Completion request to Anthropic Messages API request
@@ -35,7 +51,7 @@ export function translateOpenAIToAnthropic(
 
   for (const msg of openaiRequest.messages) {
     if (msg.role === 'system') {
-      systemMessages.push(msg.content || '');
+      systemMessages.push(extractTextContent(msg.content));
     } else {
       conversationMessages.push(msg);
     }
@@ -56,7 +72,7 @@ export function translateOpenAIToAnthropic(
 
     if (role === currentRole) {
       // Same role, accumulate content
-      currentContent.push(msg.content || '');
+      currentContent.push(extractTextContent(msg.content));
     } else {
       // Role changed, flush current message
       if (currentRole && currentContent.length > 0) {
@@ -66,7 +82,7 @@ export function translateOpenAIToAnthropic(
         });
       }
       currentRole = role;
-      currentContent = [msg.content || ''];
+      currentContent = [extractTextContent(msg.content)];
     }
   }
 
