@@ -57,41 +57,84 @@ export function translateOpenAIToAnthropic(
     }
   }
 
-  // Consolidate consecutive same-role messages for Anthropic's alternation requirement
+  // Build Anthropic messages handling tool_use/tool_result round-trips
   const anthropicMessages: Message[] = [];
-  let currentRole: 'user' | 'assistant' | null = null;
-  let currentContent: string[] = [];
 
   for (const msg of conversationMessages) {
-    if (msg.role === 'tool') {
-      // Skip tool messages for now - they need special handling
-      continue;
-    }
-
-    const role = msg.role as 'user' | 'assistant';
-
-    if (role === currentRole) {
-      // Same role, accumulate content
-      currentContent.push(extractTextContent(msg.content));
-    } else {
-      // Role changed, flush current message
-      if (currentRole && currentContent.length > 0) {
+    if (msg.role === 'assistant') {
+      // Build content blocks for assistant messages
+      const contentBlocks: ContentBlock[] = [];
+      const text = extractTextContent(msg.content);
+      if (text) {
+        contentBlocks.push({ type: 'text', text });
+      }
+      // Convert OpenAI tool_calls to Anthropic tool_use blocks
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        for (const tc of msg.tool_calls) {
+          let input: Record<string, unknown> = {};
+          try {
+            input = JSON.parse(tc.function.arguments);
+          } catch {
+            // Keep empty input if parse fails
+          }
+          contentBlocks.push({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.function.name,
+            input,
+          });
+        }
+      }
+      if (contentBlocks.length > 0) {
+        // Merge with previous assistant message if needed (Anthropic requires alternation)
+        const prev = anthropicMessages[anthropicMessages.length - 1];
+        if (prev && prev.role === 'assistant') {
+          if (typeof prev.content === 'string') {
+            prev.content = [{ type: 'text', text: prev.content }];
+          }
+          (prev.content as ContentBlock[]).push(...contentBlocks);
+        } else {
+          anthropicMessages.push({
+            role: 'assistant',
+            content:
+              contentBlocks.length === 1 && contentBlocks[0].type === 'text'
+                ? (contentBlocks[0].text as string)
+                : contentBlocks,
+          });
+        }
+      }
+    } else if (msg.role === 'tool') {
+      // Convert OpenAI tool result to Anthropic tool_result in a user message
+      const toolResultBlock: ContentBlock = {
+        type: 'tool_result',
+        tool_use_id: msg.tool_call_id,
+        content: extractTextContent(msg.content) || '',
+      };
+      // Anthropic tool_results must be in user messages
+      const prev = anthropicMessages[anthropicMessages.length - 1];
+      if (prev && prev.role === 'user' && Array.isArray(prev.content)) {
+        (prev.content as ContentBlock[]).push(toolResultBlock);
+      } else {
         anthropicMessages.push({
-          role: currentRole,
-          content: currentContent.join('\n\n'),
+          role: 'user',
+          content: [toolResultBlock],
         });
       }
-      currentRole = role;
-      currentContent = [extractTextContent(msg.content)];
+    } else {
+      // Regular user message
+      const text = extractTextContent(msg.content);
+      const prev = anthropicMessages[anthropicMessages.length - 1];
+      if (prev && prev.role === 'user') {
+        // Merge consecutive user messages
+        if (typeof prev.content === 'string') {
+          prev.content = prev.content + '\n\n' + text;
+        } else if (Array.isArray(prev.content)) {
+          (prev.content as ContentBlock[]).push({ type: 'text', text });
+        }
+      } else {
+        anthropicMessages.push({ role: 'user', content: text });
+      }
     }
-  }
-
-  // Flush final message
-  if (currentRole && currentContent.length > 0) {
-    anthropicMessages.push({
-      role: currentRole,
-      content: currentContent.join('\n\n'),
-    });
   }
 
   // Translate tools if present
@@ -103,7 +146,7 @@ export function translateOpenAIToAnthropic(
   // Build the Anthropic request
   const anthropicRequest: AnthropicRequest = {
     model: mapOpenAIModelToAnthropic(openaiRequest.model),
-    max_tokens: openaiRequest.max_tokens || 4096,
+    max_tokens: openaiRequest.max_tokens || 16384,
     messages: anthropicMessages,
     stream: openaiRequest.stream || false,
   };
