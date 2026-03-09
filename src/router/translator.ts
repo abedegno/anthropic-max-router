@@ -262,6 +262,12 @@ export async function* translateAnthropicStreamToOpenAI(
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
+  // Track tool_use blocks being streamed
+  const toolCalls: { index: number; id: string; name: string; arguments: string }[] = [];
+  let currentToolIndex = -1;
+  let currentToolArgs = '';
+  let finishReason: string = 'stop';
+
   // Send initial chunk with role
   yield `data: ${JSON.stringify({
     id: messageId,
@@ -291,7 +297,75 @@ export async function* translateAnthropicStreamToOpenAI(
         try {
           const event = JSON.parse(data);
 
-          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+          if (
+            event.type === 'content_block_start' &&
+            event.content_block?.type === 'tool_use'
+          ) {
+            // Start of a tool_use block — flush any previous tool args
+            if (currentToolIndex >= 0 && currentToolArgs) {
+              toolCalls[currentToolIndex].arguments = currentToolArgs;
+            }
+            currentToolIndex = toolCalls.length;
+            currentToolArgs = '';
+            toolCalls.push({
+              index: currentToolIndex,
+              id: event.content_block.id,
+              name: event.content_block.name,
+              arguments: '',
+            });
+            // Send tool call start chunk
+            yield `data: ${JSON.stringify({
+              id: messageId,
+              object: 'chat.completion.chunk',
+              created: Math.floor(Date.now() / 1000),
+              model: originalModel,
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: currentToolIndex,
+                        id: event.content_block.id,
+                        type: 'function',
+                        function: { name: event.content_block.name, arguments: '' },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+            })}\n\n`;
+          } else if (
+            event.type === 'content_block_delta' &&
+            event.delta?.type === 'input_json_delta'
+          ) {
+            // Tool arguments streaming
+            currentToolArgs += event.delta.partial_json;
+            yield `data: ${JSON.stringify({
+              id: messageId,
+              object: 'chat.completion.chunk',
+              created: Math.floor(Date.now() / 1000),
+              model: originalModel,
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: currentToolIndex,
+                        function: { arguments: event.delta.partial_json },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+            })}\n\n`;
+          } else if (
+            event.type === 'content_block_delta' &&
+            event.delta?.type === 'text_delta'
+          ) {
             // Text content delta
             yield `data: ${JSON.stringify({
               id: messageId,
@@ -306,9 +380,17 @@ export async function* translateAnthropicStreamToOpenAI(
                 },
               ],
             })}\n\n`;
-          } else if (event.type === 'message_delta' && event.usage) {
-            // Update token counts
-            totalOutputTokens = event.usage.output_tokens || totalOutputTokens;
+          } else if (event.type === 'message_delta') {
+            if (event.usage) {
+              totalOutputTokens = event.usage.output_tokens || totalOutputTokens;
+            }
+            if (event.delta?.stop_reason === 'tool_use') {
+              finishReason = 'tool_calls';
+            } else if (event.delta?.stop_reason === 'max_tokens') {
+              finishReason = 'length';
+            } else if (event.delta?.stop_reason) {
+              finishReason = 'stop';
+            }
           } else if (event.type === 'message_start' && event.message?.usage) {
             // Initial token count
             totalInputTokens = event.message.usage.input_tokens || 0;
@@ -318,6 +400,11 @@ export async function* translateAnthropicStreamToOpenAI(
         }
       }
     }
+  }
+
+  // Flush final tool args
+  if (currentToolIndex >= 0 && currentToolArgs) {
+    toolCalls[currentToolIndex].arguments = currentToolArgs;
   }
 
   // Send final chunk with usage information
@@ -330,7 +417,7 @@ export async function* translateAnthropicStreamToOpenAI(
       {
         index: 0,
         delta: {},
-        finish_reason: 'stop',
+        finish_reason: finishReason,
       },
     ],
     usage: {
