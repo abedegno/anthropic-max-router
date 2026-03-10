@@ -142,8 +142,16 @@ export function translateOpenAIToAnthropic(
         };
         // Anthropic tool_results must be in user messages
         const prev = anthropicMessages[anthropicMessages.length - 1];
-        if (prev && prev.role === 'user' && Array.isArray(prev.content)) {
-          (prev.content as ContentBlock[]).push(toolResultBlock);
+        if (prev && prev.role === 'user') {
+          if (Array.isArray(prev.content)) {
+            (prev.content as ContentBlock[]).push(toolResultBlock);
+          } else {
+            // Convert string content to array so we can append the tool_result
+            prev.content = [
+              { type: 'text', text: prev.content as string },
+              toolResultBlock,
+            ];
+          }
         } else {
           anthropicMessages.push({
             role: 'user',
@@ -371,7 +379,8 @@ export async function* translateAnthropicStreamToOpenAI(
             event.type === 'content_block_delta' &&
             event.delta?.type === 'input_json_delta'
           ) {
-            // Tool arguments streaming
+            // Tool arguments streaming — skip if no tool block has started
+            if (currentToolIndex < 0) continue;
             currentToolArgs += event.delta.partial_json;
             yield `data: ${JSON.stringify({
               id: messageId,
