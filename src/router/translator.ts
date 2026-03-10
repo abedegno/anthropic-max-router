@@ -113,21 +113,38 @@ export function translateOpenAIToAnthropic(
         }
       }
     } else if (msg.role === 'tool') {
-      // Convert OpenAI tool result to Anthropic tool_result in a user message
-      const toolResultBlock: ContentBlock = {
-        type: 'tool_result',
-        tool_use_id: msg.tool_call_id,
-        content: extractTextContent(msg.content) || '',
-      };
-      // Anthropic tool_results must be in user messages
-      const prev = anthropicMessages[anthropicMessages.length - 1];
-      if (prev && prev.role === 'user' && Array.isArray(prev.content)) {
-        (prev.content as ContentBlock[]).push(toolResultBlock);
+      if (!msg.tool_call_id) {
+        // Missing tool_call_id — treat as a regular user message
+        const text = extractTextContent(msg.content);
+        if (text) {
+          const prev = anthropicMessages[anthropicMessages.length - 1];
+          if (prev && prev.role === 'user') {
+            if (typeof prev.content === 'string') {
+              prev.content = prev.content + '\n\n' + text;
+            } else if (Array.isArray(prev.content)) {
+              (prev.content as ContentBlock[]).push({ type: 'text', text });
+            }
+          } else {
+            anthropicMessages.push({ role: 'user', content: text });
+          }
+        }
       } else {
-        anthropicMessages.push({
-          role: 'user',
-          content: [toolResultBlock],
-        });
+        // Convert OpenAI tool result to Anthropic tool_result in a user message
+        const toolResultBlock: ContentBlock = {
+          type: 'tool_result',
+          tool_use_id: msg.tool_call_id,
+          content: extractTextContent(msg.content) || '',
+        };
+        // Anthropic tool_results must be in user messages
+        const prev = anthropicMessages[anthropicMessages.length - 1];
+        if (prev && prev.role === 'user' && Array.isArray(prev.content)) {
+          (prev.content as ContentBlock[]).push(toolResultBlock);
+        } else {
+          anthropicMessages.push({
+            role: 'user',
+            content: [toolResultBlock],
+          });
+        }
       }
     } else {
       // Regular user message
