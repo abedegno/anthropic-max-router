@@ -31,8 +31,15 @@ import { mapOpenAIModelToAnthropic } from './model-mapper.js';
 function extractTextContent(content: string | OpenAIContentBlock[] | null): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
+    const unsupported = content.filter((block) => block.type !== 'text');
+    if (unsupported.length > 0) {
+      const types = [...new Set(unsupported.map((b) => b.type))].join(', ');
+      throw new Error(
+        `Unsupported content block type(s): ${types}. Only text content blocks are supported.`
+      );
+    }
     return content
-      .filter((block) => block.type === 'text' && block.text)
+      .filter((block) => block.text)
       .map((block) => block.text!)
       .join('');
   }
@@ -71,11 +78,13 @@ export function translateOpenAIToAnthropic(
       // Convert OpenAI tool_calls to Anthropic tool_use blocks
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         for (const tc of msg.tool_calls) {
-          let input: Record<string, unknown> = {};
+          let input: Record<string, unknown>;
           try {
             input = JSON.parse(tc.function.arguments);
-          } catch {
-            // Keep empty input if parse fails
+          } catch (e) {
+            throw new Error(
+              `Failed to parse tool call arguments for "${tc.function.name}" (id: ${tc.id}): ${e instanceof Error ? e.message : String(e)}`
+            );
           }
           contentBlocks.push({
             type: 'tool_use',
