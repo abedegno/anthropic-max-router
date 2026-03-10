@@ -86,6 +86,11 @@ export function translateOpenAIToAnthropic(
               `Failed to parse tool call arguments for "${tc.function.name}" (id: ${tc.id}): ${e instanceof Error ? e.message : String(e)}`
             );
           }
+          if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+            throw new Error(
+              `Tool call arguments for "${tc.function.name}" (id: ${tc.id}) must be a JSON object, got ${input === null ? 'null' : Array.isArray(input) ? 'array' : typeof input}`
+            );
+          }
           contentBlocks.push({
             type: 'tool_use',
             id: tc.id,
@@ -172,9 +177,9 @@ export function translateOpenAIToAnthropic(
   // Build the Anthropic request
   const anthropicRequest: AnthropicRequest = {
     model: mapOpenAIModelToAnthropic(openaiRequest.model),
-    max_tokens: openaiRequest.max_tokens || 16384,
+    max_tokens: openaiRequest.max_tokens ?? 16384,
     messages: anthropicMessages,
-    stream: openaiRequest.stream || false,
+    stream: openaiRequest.stream ?? false,
   };
 
   // Add system messages if present
