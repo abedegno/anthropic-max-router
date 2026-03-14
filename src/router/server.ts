@@ -173,7 +173,37 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'anthropic-max-plan-router' });
 });
 
-// OpenAI Models endpoint - proxy to Anthropic API with API key
+// Claude model capability metadata for OpenAI-compatible /v1/models responses.
+// Ensures clients like LiteLLM/CrewAI detect function calling support.
+const CLAUDE_MODELS = [
+  'claude-opus-4-6',
+  'claude-sonnet-4-6',
+  'claude-opus-4-20250514',
+  'claude-sonnet-4-20250514',
+  'claude-haiku-4-5-20251001',
+  'claude-sonnet-4-5-20250514',
+  'claude-haiku-4-5',
+];
+
+function buildModelList() {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    object: 'list',
+    data: CLAUDE_MODELS.map((id) => ({
+      id,
+      object: 'model',
+      created: now,
+      owned_by: 'anthropic',
+      supports_function_calling: true,
+      supports_vision: true,
+      supports_response_streaming: true,
+    })),
+  };
+}
+
+// OpenAI Models endpoint
+// Without API key: returns local model list with capability metadata
+// With API key: proxies to Anthropic API and enriches with capabilities
 app.get('/v1/models', async (req: Request, res: Response) => {
   try {
     // Check for API key in headers
@@ -184,14 +214,8 @@ app.get('/v1/models', async (req: Request, res: Response) => {
         : null);
 
     if (!apiKey) {
-      res.status(401).json({
-        type: 'error',
-        error: {
-          type: 'authentication_error',
-          message:
-            'x-api-key header is required for /v1/models endpoint. Note: API key is only used for this endpoint; other endpoints use OAuth authentication.',
-        },
-      });
+      // Return local model list with capability metadata
+      res.json(buildModelList());
       return;
     }
 
@@ -203,7 +227,18 @@ app.get('/v1/models', async (req: Request, res: Response) => {
       },
     });
 
-    const data = await response.json();
+    const data = (await response.json()) as { data?: Array<Record<string, unknown>> };
+
+    // Enrich Anthropic models with capability metadata
+    if (data.data && Array.isArray(data.data)) {
+      data.data = data.data.map((model) => ({
+        ...model,
+        supports_function_calling: true,
+        supports_vision: true,
+        supports_response_streaming: true,
+      }));
+    }
+
     res.status(response.status).json(data);
   } catch (error) {
     res.status(500).json({
