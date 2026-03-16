@@ -76,7 +76,12 @@ export function mapOpenAIModelToAnthropic(modelName: string): string {
     return process.env.ANTHROPIC_DEFAULT_MODEL;
   }
 
-  // 3. Pattern-based tier detection
+  // 3. Pass through Anthropic model names unchanged
+  if (modelName.startsWith('claude-')) {
+    return modelName;
+  }
+
+  // 4. Pattern-based tier detection
   const model = modelName.toLowerCase();
 
   // High-tier patterns → Opus (premium/reasoning models)
@@ -113,6 +118,10 @@ export function getModelMappingReason(modelName: string): string {
 
   if (process.env.ANTHROPIC_DEFAULT_MODEL) {
     return 'environment variable override';
+  }
+
+  if (modelName.startsWith('claude-')) {
+    return 'anthropic model passthrough';
   }
 
   const model = modelName.toLowerCase();
